@@ -1,3 +1,5 @@
+[UP TO DATE BLFS 12.1] BLFS up-to date
+
 To use these scripts you should have installed LFS using my LFS-BuildScripts.
 Copy blfs03.sh, blfsfiles.tar.xz and pkgorder.sh to $LFS. Edit blfs03.sh to add your group and username at the end. I have put a placeholder called john. Then run the script.
 
