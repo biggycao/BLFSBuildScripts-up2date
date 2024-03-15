@@ -45,14 +45,22 @@ pathappend () {
 export -f pathremove pathprepend pathappend
 
 # Set the initial path
-export PATH=/bin:/usr/bin
+export PATH=/usr/bin
+
+# Attempt to provide backward compatibility with LFS earlier than 11
+if [ ! -L /bin ]; then
+        pathappend /bin
+fi
 
 if [ $EUID -eq 0 ] ; then
-        pathappend /sbin:/usr/sbin
+        pathappend /usr/sbin
+        if [ ! -L /sbin ]; then
+                pathappend /sbin
+        fi
         unset HISTFILE
 fi
 
-# Setup some environment variables.
+# Set up some environment variables.
 export HISTSIZE=1000
 export HISTIGNORE="&:[bf]g:exit"
 
@@ -61,7 +69,7 @@ export XDG_DATA_DIRS=${XDG_DATA_DIRS:-/usr/share/}
 export XDG_CONFIG_DIRS=${XDG_CONFIG_DIRS:-/etc/xdg/}
 export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/tmp/xdg-$USER}
 
-# Setup a red prompt for root and a green one for users.
+# Set up a red prompt for root and a green one for users.
 NORMAL="\[\e[0m\]"
 RED="\[\e[1;31m\]"
 GREEN="\[\e[1;32m\]"
@@ -78,7 +86,7 @@ for script in /etc/profile.d/*.sh ; do
 done
 
 unset script RED GREEN NORMAL
-umask 0022
+
 # End /etc/profile
 EOF
 install --directory --mode=0755 --owner=root --group=root /etc/profile.d
@@ -86,23 +94,51 @@ cat > /etc/profile.d/bash_completion.sh << "EOF"
 # Begin /etc/profile.d/bash_completion.sh
 # Import bash completion scripts
 
-for script in /etc/bash_completion.d/*.sh ; do
-        if [ -r $script ] ; then
-                . $script
-        fi
-done
+# If the bash-completion package is installed, use its configuration instead
+if [ -f /usr/share/bash-completion/bash_completion ]; then
+
+  # Check for interactive bash and that we haven't already been sourced.
+  if [ -n "${BASH_VERSION-}" -a -n "${PS1-}" -a -z "${BASH_COMPLETION_VERSINFO-}" ]; then
+
+    # Check for recent enough version of bash.
+    if [ ${BASH_VERSINFO[0]} -gt 4 ] || \
+       [ ${BASH_VERSINFO[0]} -eq 4 -a ${BASH_VERSINFO[1]} -ge 1 ]; then
+       [ -r "${XDG_CONFIG_HOME:-$HOME/.config}/bash_completion" ] && \
+            . "${XDG_CONFIG_HOME:-$HOME/.config}/bash_completion"
+       if shopt -q progcomp && [ -r /usr/share/bash-completion/bash_completion ]; then
+          # Source completion code.
+          . /usr/share/bash-completion/bash_completion
+       fi
+    fi
+  fi
+
+else
+
+  # bash-completions are not installed, use only bash completion directory
+  if shopt -q progcomp; then
+    for script in /etc/bash_completion.d/* ; do
+      if [ -r $script ] ; then
+        . $script
+      fi
+    done
+  fi
+fi
+
 # End /etc/profile.d/bash_completion.sh
 EOF
+install --directory --mode=0755 --owner=root --group=root /etc/bash_completion.d
 cat > /etc/profile.d/dircolors.sh << "EOF"
-# Setup for /bin/ls to support color, the alias is in /etc/bashrc.
+# Setup for /bin/ls and /bin/grep to support color, the alias is in /etc/bashrc.
 if [ -f "/etc/dircolors" ] ; then
         eval $(dircolors -b /etc/dircolors)
-
-        if [ -f "$HOME/.dircolors" ] ; then
-                eval $(dircolors -b $HOME/.dircolors)
-        fi
 fi
+
+if [ -f "$HOME/.dircolors" ] ; then
+        eval $(dircolors -b $HOME/.dircolors)
+fi
+
 alias ls='ls --color=auto'
+alias grep='grep --color=auto'
 EOF
 cat > /etc/profile.d/extrapaths.sh << "EOF"
 if [ -d /usr/local/lib/pkgconfig ] ; then
@@ -115,27 +151,40 @@ if [ -d /usr/local/sbin -a $EUID -eq 0 ]; then
         pathprepend /usr/local/sbin
 fi
 
-if [ -d ~/bin ]; then
-        pathprepend ~/bin
+if [ -d /usr/local/share ]; then
+        pathprepend /usr/local/share XDG_DATA_DIRS
 fi
-#if [ $EUID -gt 99 ]; then
-#        pathappend .
-#fi
+
+# Set some defaults before other applications add to these paths.
+pathappend /usr/share/man  MANPATH
+pathappend /usr/share/info INFOPATH
 EOF
 cat > /etc/profile.d/readline.sh << "EOF"
-# Setup the INPUTRC environment variable.
+# Set up the INPUTRC environment variable.
 if [ -z "$INPUTRC" -a ! -f "$HOME/.inputrc" ] ; then
         INPUTRC=/etc/inputrc
 fi
 export INPUTRC
 EOF
 cat > /etc/profile.d/umask.sh << "EOF"
-umask 022
-if [ "$(id -gn)" = "$(id -un)" -a $EUID -gt 99 ]; then umask 002; fi
+# By default, the umask should be set.
+if [ "$(id -gn)" = "$(id -un)" -a $EUID -gt 99 ] ; then
+  umask 002
+else
+  umask 022
+fi
 EOF
 cat > /etc/profile.d/i18n.sh << "EOF"
 # Set up i18n variables
-export LANG=en_US.UTF-8
+for i in $(locale); do
+  unset ${i%=*}
+done
+
+if [[ "$TERM" = linux ]]; then
+  export LANG=C.UTF-8
+else
+  export LANG=<ll>_<CC>.<charmap><@modifiers>
+fi
 EOF
 cat > /etc/bashrc << "EOF"
 # Begin /etc/bashrc
@@ -228,6 +277,19 @@ fi
 
 # End ~/.bash_profile
 EOF
+cat > ~/.profile << "EOF"
+# Begin ~/.profile
+# Personal environment variables and startup programs.
+
+if [ -d "$HOME/bin" ] ; then
+  pathprepend $HOME/bin
+fi
+
+# Set up user specific i18n variables
+#export LANG=<ll>_<CC>.<charmap><@modifiers>
+
+# End ~/.profile
+EOF
 cat > ~/.bashrc << "EOF"
 # Begin ~/.bashrc
 # Written for Beyond Linux From Scratch
@@ -243,6 +305,9 @@ cat > ~/.bashrc << "EOF"
 if [ -f "/etc/bashrc" ] ; then
   source /etc/bashrc
 fi
+
+# Set up user specific i18n variables
+#export LANG=<ll>_<CC>.<charmap><@modifiers>
 
 # End ~/.bashrc
 EOF
@@ -261,6 +326,9 @@ cat > /etc/skel/.bashrc << "EOF"
 if [ -f "/etc/bashrc" ] ; then
   source /etc/bashrc
 fi
+
+# Set up user specific i18n variables
+#export LANG=<ll>_<CC>.<charmap><@modifiers>
 
 # End ~/.bashrc
 EOF
@@ -325,6 +393,10 @@ cat > /etc/shells << "EOF"
 
 # End /etc/shells
 EOF
-groupadd -g 1000 john
-useradd -m -u 1000 -g john john
-echo "set a password for user john"
+cat > /etc/issues << "EOF"
+\s
+EOF
+groupadd -g 1000 BJL
+useradd -m -u 1000 -g BJL BJL
+echo "set a SHORT password for user BJL:"
+passwd BJLs
